@@ -6,7 +6,7 @@ import openai
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as firebase_auth
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import bcrypt
@@ -20,6 +20,8 @@ import httpx
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 import jwt
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -36,6 +38,8 @@ def create_jwt_token(user_id):
     }
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm="HS256")
 
+load_dotenv()
+load_dotenv(dotenv_path='./.env')
 
 # Environment Variables
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
