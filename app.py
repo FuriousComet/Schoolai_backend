@@ -324,13 +324,16 @@ def send_generation_request(host, params):
 def generate_chapters():
     data = request.json
     prompt = data['prompt']
+    num_chapters = data.get('chapters', 6)  # Default to 6 if not provided
+    num_subchapters = data.get('chapterDepth', 3)  # Default to 3 if not provided
+    
     prompt_message = f"""
     Generate a comprehensive list of chapters and subchapters for a detailed course on {prompt}.
-    The number of chapters is 6, and each chapter has 2-5 subchapters.
+    The number of chapters is {num_chapters}, and each chapter has {num_subchapters} subchapters.
     Please adhere strictly to the following format:
     {{
-        "Chapter 1: Chapter Title": ["Subchapter Title 1", "Subchapter Title 2", ..., "Subchapter Title N"],
-        "Chapter 2: Chapter Title": ["Subchapter Title 1", "Subchapter Title 2", ..., "Subchapter Title N"],
+        "Chapter 1: Chapter Title": ["Subchapter Title 1", "Subchapter Title 2", ..., "Subchapter Title {num_subchapters}"],
+        "Chapter 2: Chapter Title": ["Subchapter Title 1", "Subchapter Title 2", ..., "Subchapter Title {num_subchapters}"],
         ...
     }}
     Do not include any explanations, introductions, or any other extraneous information. 
