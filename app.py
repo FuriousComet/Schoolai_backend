@@ -389,9 +389,14 @@ def generate_content():
 
     def fetch_content(chapter_name, subchapter_name):
         prompt_message = f"""
-        Generate the content for a subchapter in a course. The chapter title is {chapter_name}. The title of the subchapter is {subchapter_name}. The course is about {prompt}. 
-        Please only include the requested data. Additionally, include suggestions for images where appropriate by wrapping the suggestions in [IMAGE: ...]. 
-        Do not include the chapter title, the subchapter title, or the course title in the data, only the chapter content.
+        Generate the content for a subchapter in a course. The chapter title is {chapter_name}. The title of the subchapter is {subchapter_name}. The course is about {prompt}.
+        The content should be formatted with below delimiters, and no other text or explanations should be included.
+        1. Concepts marked with <<Concept>>.
+        2. Titles marked with <<Title>>.
+        3. Subheadings marked with <<Subheading>>.
+        4. Emphasis marked with <<Emphasis>>.
+        5. Code sections marked with <<Code>>.
+        
         """
         request_payload = [
             {"role": "system", "content": "You are an expert content generator."},
@@ -421,9 +426,9 @@ def generate_content():
         image_prompt, rest_of_content = part.split(']', 1)
         image_url = search_image(image_prompt.strip())
         if image_url:
-            final_content += f'<img src="{image_url}" alt="{image_prompt.strip()}"/>' + rest_of_content
+            final_content += f'<<Image:URL>> {image_url}' + rest_of_content
         else:
-            final_content += f'[IMAGE: {image_prompt.strip()}]' + rest_of_content
+            final_content += f'<<Image:URL>> [IMAGE: {image_prompt.strip()}]' + rest_of_content
 
     return jsonify(final_content)
 
@@ -473,6 +478,40 @@ def dig_deeper():
 
     return jsonify(final_content)
 
+@app.route('/generate-explanation', methods=['POST'])
+def generate_explanation():
+    data = request.json
+    prompt = f"Explain the course content for the chapter '{data['chapter_name']}' and subchapter '{data['subchapter_name']}'. The course is about {data['prompt']}."
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are an expert educator."},
+            {"role": "user", "content": prompt},
+        ]
+    )
+    explanation_text = response['choices'][0]['message']['content']
+    audio_content = generate_voice(explanation_text, data['voice_id'])
+    
+    return send_file(audio_content, as_attachment=True, mimetype='audio/mpeg')
+
+@app.route('/ask-question', methods=['POST'])
+def ask_question():
+    data = request.json
+    prompt = data['prompt']
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are an expert in answering questions related to the course content."},
+            {"role": "user", "content": prompt},
+        ]
+    )
+    answer_text = response['choices'][0]['message']['content']
+    audio_content = generate_voice(answer_text, data['voice_id'])
+    
+    return send_file(audio_content, as_attachment=True, mimetype='audio/mpeg')
+    
 @app.route('/generate-exam', methods=['POST'])
 def generate_exam():
     data = request.json
@@ -613,26 +652,12 @@ def generate_teacher():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/generate-voice', methods=['POST'])
-def generate_voice():
-    try:
-        voice_id = request.form['voice_id']
-        text = request.form['text']
+def generate_voice(text: str, voice_id: str) -> str:
+    unique_id = uuid.uuid4()
+    output_file_path = os.path.join('static', 'audio', f"generated_{unique_id}.mp3")
 
-        unique_id = uuid.uuid4()
-        output_file_path = os.path.join('static', 'audio', f"generated_{unique_id}.mp3")
-
-        os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
-
-        text_to_speech_file(text, voice_id, output_file_path)
-
-        return send_file(output_file_path, as_attachment=True)
-    except ApiError as e:
-        app.logger.error(f"API Error: {e.body}, Status Code: {e.status_code}")
-        return jsonify({"error": "API Error"}), 500
-    except Exception as e:
-        app.logger.error(f"Unhandled Exception: {e}, route: {request.url}")
-        return jsonify({"error": "Unhandled Exception"}), 500
+    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+    return text_to_speech_file(text, voice_id, output_file_path)
 
 @app.route('/generate-avatar', methods=['POST'])
 def generate_avatar():
