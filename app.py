@@ -275,19 +275,38 @@ def send_request(endpoint, headers, payload):
     raise requests.exceptions.RequestException("Failed to connect after multiple attempts.")
 
 def search_image(query):
-    for _ in range(3):  # Retry up to 3 times
-        params = {
-            "engine": "google",
-            "q": query,
-            "tbm": "isch",
-            "api_key": serpapi_api_key
-        }
-        response = requests.get("https://serpapi.com/search", params=params)
-        if response.status_code == 200:
-            images = response.json().get('images_results', [])
-            if images:
-                return images[0]['original']
-        time.sleep(2)  # Wait before retrying
+    """
+    Searches for an image using the SERP API with a given query.
+    """
+    max_attempts = 3  # Retry up to 3 times
+    for attempt in range(max_attempts):
+        try:
+            params = {
+                "engine": "google_images",  # Correct engine name for image search
+                "q": query,
+                "api_key": serpapi_api_key,
+                "num": 1  # Fetch only one image to minimize data and response time
+            }
+            response = requests.get("https://serpapi.com/search", params=params)
+            
+            # Check if the response status is 200 (OK)
+            if response.status_code == 200:
+                images = response.json().get('images_results', [])
+                if images:
+                    # Return the first image URL if available
+                    return images[0].get('original', None)
+                else:
+                    print("No images found in the response.")
+            else:
+                print(f"Error: Received response with status code {response.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"Request Error on attempt {attempt + 1}: {e}")
+        
+        # Wait before retrying
+        time.sleep(2)
+    
+    # Return None if no image was found after max_attempts
     return None
 
 def send_generation_request(host, params):
@@ -396,8 +415,9 @@ def generate_content():
         3. Subheadings marked with <<Subheading>>.
         4. Emphasis marked with <<Emphasis>>.
         5. Code sections marked with <<Code>>.
-        
+        If possible, suggest relevant images in the format [IMAGE: Image description or keyword].
         """
+
         request_payload = [
             {"role": "system", "content": "You are an expert content generator."},
             {"role": "user", "content": prompt_message},
@@ -420,16 +440,25 @@ def generate_content():
         future = executor.submit(fetch_content, chapter_name, subchapter_name)
         gpt_response = future.result()
 
+    # Split content based on [IMAGE: ...] markers
     content_parts = gpt_response.split('[IMAGE:')
     final_content = content_parts[0]
-    for part in content_parts[1:]:
-        image_prompt, rest_of_content = part.split(']', 1)
-        image_url = search_image(image_prompt.strip())
-        if image_url:
-            final_content += f'<<Image:URL>> {image_url}' + rest_of_content
-        else:
-            final_content += f'<<Image:URL>> [IMAGE: {image_prompt.strip()}]' + rest_of_content
 
+    # Process each part that contains an image prompt
+    for part in content_parts[1:]:
+        try:
+            image_prompt, rest_of_content = part.split(']', 1)
+            image_url = search_image(image_prompt.strip())
+            if image_url:
+                # Include the image URL in the formatted content
+                final_content += f'<<Image:URL>> {image_url}\n' + rest_of_content
+            else:
+                # If image search fails, include the prompt as is
+                final_content += f'[IMAGE: {image_prompt.strip()}]' + rest_of_content
+        except ValueError:
+            # Handles case where split fails, appending the original part
+            final_content += f'[IMAGE: {part.strip()}]'
+    print(final_content)
     return jsonify(final_content)
 
 @app.route('/dig-deeper', methods=['POST'])
@@ -511,7 +540,109 @@ def ask_question():
     audio_content = generate_voice(answer_text, data['voice_id'])
     
     return send_file(audio_content, as_attachment=True, mimetype='audio/mpeg')
+
+@app.route('/generate-final-exam', methods=['POST'])
+def generate_final_exam():
+    data = request.json
+    prompt = data['prompt']
     
+    prompt_message = f"""
+    Generate a final exam for the course on '{prompt}'.
+    Include three types of questions for each chapter:
+    1. Selection problems (multiple-choice) - 3 questions
+    2. Fill-in-the-blank problems - 3 questions
+    3. Entry problems (short answer) - 3 questions
+
+    Format the response as a JSON array with the following structure:
+    [
+        {{
+            "type": "selection",
+            "question": "question text",
+            "options": ["option1", "option2", "option3", "option4"],
+            "correct_answer": "option1"
+        }},
+        {{
+            "type": "fill-in-the-blank",
+            "question": "question text with __blank__",
+            "correct_answer": "answer"
+        }},
+        {{
+            "type": "entry",
+            "question": "question text",
+            "correct_answer": "answer"
+        }}
+    ]
+    """
+    
+    request_payload = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": prompt_message},
+    ]
+    
+    payload = {
+        "model": "gpt-4",
+        "messages": request_payload,
+        "max_tokens": 2000
+    }
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {openai.api_key}"
+    }
+    
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    response = send_request(endpoint, headers, payload)
+    gpt_response = response['choices'][0]['message']['content']
+    print("Final Exam Questions Response:", gpt_response)  # Debug response
+    
+    try:
+        json_response = json.loads(gpt_response)
+    except json.JSONDecodeError as e:
+        print(f"Failed to decode JSON response: {e}")
+        return jsonify({"error": "Failed to decode JSON response from OpenAI"}), 500
+
+    return jsonify(json_response)
+
+@app.route('/evaluate-final-exam', methods=['POST'])
+def evaluate_final_exam():
+    data = request.json
+    questions = data['questions']
+    user_answers = data['answers']
+
+    correct_answers = {q['question']: q['correct_answer'] for q in questions}
+    results = {q['question']: (user_answers[q['question']] == q['correct_answer']) for q in questions}
+    score = sum(results.values())
+    total_questions = len(questions)
+    score_5_point = (score / total_questions) * 5
+
+    explanations = {}
+    for question in questions:
+        explanation_prompt = f"Explain the correct answer for the following question:\nQuestion: {question['question']}\nCorrect Answer: {question['correct_answer']}"
+        request_payload = [
+            {"role": "system", "content": "You are a knowledgeable assistant."},
+            {"role": "user", "content": explanation_prompt},
+        ]
+        payload = {
+            "model": "gpt-4",
+            "messages": request_payload,
+            "max_tokens": 500
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {openai.api_key}"
+        }
+        endpoint = "https://api.openai.com/v1/chat/completions"
+        response = send_request(endpoint, headers, payload)
+        explanation_response = response['choices'][0]['message']['content']
+        explanations[question['question']] = explanation_response
+
+    return jsonify({
+        'results': results,
+        'score': round(score_5_point, 1),
+        'total': total_questions,
+        'explanations': explanations
+    })
+
 @app.route('/generate-exam', methods=['POST'])
 def generate_exam():
     data = request.json
